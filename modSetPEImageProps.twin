@@ -1,0 +1,264 @@
+Module modSetImageProps
+/*
+    modSetPEImageProps v1.0.1
+    Set PE Image Header Properties
+    
+    by Jon Johnson
+    
+    How to use: There are constants you modify here at the top, specifying how you want
+        them set in the PE headers. You must then toggle the enabling constant for that
+        section, and the master switch. Values provided are tB defaults.
+        WARNING: This only modifies the flags; it does not actually implement certain 
+                 features. If you specify a flag for a feature your exe does not support,
+                 it may fail to load or crash.
+       
+        When enabled, it will run automatically after build and modify the exe/dll/sys
+        file that was just produced. You can also run it manually by calling the sub
+        AutoModifyPEImage, either manually specifying a file or leaving that off in 
+        which case it attempts to use the last build path.
+*/
+
+#Const MASTER_ENABLE = 1
+
+#Const ENABLE_OPT_HEADER_VERSIONING = 1
+Private Const MajorLinkerVersion As Byte = 7 'Default: 6
+Private Const MinorLinkerVersion As Byte = 0 'Default: 0
+Private Const MajorOperatingSystemVersion As Integer = 10 'Default: 4 (4.0 - Windows NT 4.0)
+Private Const MinorOperatingSystemVersion As Integer = 0 'Default: 0
+Private Const MajorImageVersion As Integer = 10 'Default: 1
+Private Const MinorImageVersion As Integer = 0 'Default: 0
+Private Const MajorSubsystemVersion As Integer = 10 'Default: 4 (4.0 - Windows NT 4.0)
+Private Const MinorSubsystemVersion As Integer = 0 'Default: 0
+Private Const Win32VersionValue As Long = 0 'Default: 0
+
+#Const ENABLE_OPT_HEADER_DLL_CHARACTERISTICS = 0
+Private Const DLLCHARACTERISTICS_HIGH_ENTROPY_VA = 0 'Default: 0  ' Image can handle a high entropy 64-bit virtual address space.
+Private Const DLLCHARACTERISTICS_DYNAMIC_BASE = 1 'Default: 1  ' DLL can move.
+Private Const DLLCHARACTERISTICS_FORCE_INTEGRITY = 0 'Default: 0  ' Code Integrity Image
+Private Const DLLCHARACTERISTICS_NX_COMPAT = 0 'Default: 0  ' Image is NX compatible
+Private Const DLLCHARACTERISTICS_NO_ISOLATION = 0 'Default: 0  ' Image understands isolation and doesn't want it
+Private Const DLLCHARACTERISTICS_NO_SEH = 1 'Default: 1 ' Image does not use SEH.  No SE handler may reside in this image
+Private Const DLLCHARACTERISTICS_NO_BIND = 0 'Default: 0  ' Do not bind this image.
+Private Const DLLCHARACTERISTICS_APPCONTAINER = 0 'Default: 0  ' Image should execute in an AppContainer
+Private Const DLLCHARACTERISTICS_WDM_DRIVER = 0 'Default: 0  ' Driver uses WDM model
+Private Const DLLCHARACTERISTICS_GUARD_CF = 0 'Default: 0  ' Image supports Control Flow Guard.
+Private Const DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE = 0 'Default: 0
+
+
+#If MASTER_ENABLE Then
+[RunAfterBuild]
+#End If
+Public Sub AutoModifyPEImage(Optional szFile As String)
+    Dim lpBaseAddress As LongPtr
+    Dim hFile As LongPtr
+    Dim hMapping As LongPtr
+    Dim szPE As String
+    If szFile = "" Then
+        szPE = App.LastBuildPath
+    Else
+        szPE = szFile
+    End If
+    hFile = CreateFileW(StrPtr(szPE), GENERIC_READ Or GENERIC_WRITE, FILE_SHARE_READ, vbNullPtr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0)
+
+    If hFile = INVALID_HANDLE_VALUE Then
+        Debug.Print "Failed to open file " & szPE
+        Exit Sub
+    End If
+
+    hMapping = CreateFileMappingW(hFile, vbNullPtr, PAGE_READWRITE, 0, 0, 0)
+
+    If hMapping = 0 Then
+        Debug.Print "Failed to map file " & App.LastBuildPath
+        CloseHandle hFile
+    End If
+
+    lpBaseAddress = MapViewOfFile(hMapping, FILE_MAP_ALL_ACCESS, 0, 0, 0)
+    
+    If lpBaseAddress = 0 Then
+        Debug.Print "Failed to map file " & App.LastBuildPath
+        CloseHandle hMapping
+        CloseHandle hFile
+    End If
+    Dim tDOS As IMAGE_DOS_HEADER
+    Dim tNT32 As IMAGE_NT_HEADERS32
+    Dim tNT64 As IMAGE_NT_HEADERS64
+    Dim wMachine As Integer, dwMachine As ImageMachineType
+    
+    'All EXEs and DLLs start with an IMAGE_DOS_HEADER structure
+    CopyMemory tDOS, ByVal lpBaseAddress, LenB(tDOS)
+    If tDOS.e_magic = IMAGE_DOS_SIGNATURE Then 'The magic number, 'MZ', is a good sign our address gave us a valid executable
+        'e_lfanew points to the IMAGE_NT_HEADERS structure
+        
+        'First copy IMAGE_NT_HEADERS.IMAGE_FILE_HEADER.Machine to determine which bitness-specific version to use.
+        CopyMemory wMachine, ByVal PointerAdd(lpBaseAddress, tDOS.e_lfanew + 4), 2
+        dwMachine = CIntToUInt(wMachine)
+        
+        If dwMachine = IMAGE_FILE_MACHINE_I386 Then '32bit
+            Debug.Print "Modifying 32bit image..."
+            CopyMemory tNT32, ByVal PointerAdd(lpBaseAddress, tDOS.e_lfanew), LenB(Of IMAGE_NT_HEADERS32)
+            
+            #If ENABLE_OPT_HEADER_VERSIONING Then
+                Debug.Print "Setting versions... current Linker=" & tNT32.OptionalHeader.MajorLinkerVersion & "." & tNT32.OptionalHeader.MinorLinkerVersion
+                tNT32.OptionalHeader.MajorLinkerVersion = MajorLinkerVersion
+                tNT32.OptionalHeader.MinorLinkerVersion = MinorLinkerVersion
+                tNT32.OptionalHeader.MajorOperatingSystemVersion = MajorOperatingSystemVersion
+                tNT32.OptionalHeader.MinorOperatingSystemVersion = MinorOperatingSystemVersion
+                tNT32.OptionalHeader.MajorImageVersion = MajorImageVersion
+                tNT32.OptionalHeader.MinorImageVersion = MinorImageVersion
+                tNT32.OptionalHeader.MajorSubsystemVersion = MajorSubsystemVersion
+                tNT32.OptionalHeader.MinorSubsystemVersion = MinorSubsystemVersion
+                tNT32.OptionalHeader.Win32VersionValue = Win32VersionValue
+            #End If
+            #If ENABLE_OPT_HEADER_DLL_CHARACTERISTICS Then
+                If DLLCHARACTERISTICS_HIGH_ENTROPY_VA Then
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA
+                Else
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA
+                End If
+                If DLLCHARACTERISTICS_DYNAMIC_BASE Then
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE
+                Else
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE
+                End If
+                If DLLCHARACTERISTICS_FORCE_INTEGRITY Then
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_FORCE_INTEGRITY
+                Else
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_FORCE_INTEGRITY
+                End If
+                If DLLCHARACTERISTICS_NX_COMPAT Then
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_NX_COMPAT
+                Else
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_NX_COMPAT
+                End If
+                If DLLCHARACTERISTICS_NO_ISOLATION Then
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_NO_ISOLATION
+                Else
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_NO_ISOLATION
+                End If
+                If DLLCHARACTERISTICS_NO_SEH Then
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_NO_SEH
+                Else
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_NO_SEH
+                End If
+                If DLLCHARACTERISTICS_NO_BIND Then
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_NO_BIND
+                Else
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_NO_BIND
+                End If
+                If DLLCHARACTERISTICS_APPCONTAINER Then
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_APPCONTAINER
+                Else
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_APPCONTAINER
+                End If
+                If DLLCHARACTERISTICS_WDM_DRIVER Then
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_WDM_DRIVER
+                Else
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_WDM_DRIVER
+                End If
+                If DLLCHARACTERISTICS_GUARD_CF Then
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_GUARD_CF
+                Else
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_GUARD_CF
+                End If
+                If DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE Then
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE
+                Else
+                    tNT32.OptionalHeader.DllCharacteristics = tNT32.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE
+                End If
+            #End If
+            
+            CopyMemory ByVal PointerAdd(lpBaseAddress, tDOS.e_lfanew), tNT32, LenB(Of IMAGE_NT_HEADERS32)
+            Debug.Print "Successfully updated header in compiled binary."
+                        
+        ElseIf dwMachine = IMAGE_FILE_MACHINE_AMD64 Then
+            Debug.Print "Modifying 64bit image..."
+            CopyMemory tNT64, ByVal PointerAdd(lpBaseAddress, tDOS.e_lfanew), LenB(Of IMAGE_NT_HEADERS64)
+                
+            #If ENABLE_OPT_HEADER_VERSIONING Then
+                Debug.Print "Setting versions... current Linker=" & tNT64.OptionalHeader.MajorLinkerVersion & "." & tNT64.OptionalHeader.MinorLinkerVersion
+                tNT64.OptionalHeader.MajorLinkerVersion = MajorLinkerVersion
+                tNT64.OptionalHeader.MinorLinkerVersion = MinorLinkerVersion
+                tNT64.OptionalHeader.MajorOperatingSystemVersion = MajorOperatingSystemVersion
+                tNT64.OptionalHeader.MinorOperatingSystemVersion = MinorOperatingSystemVersion
+                tNT64.OptionalHeader.MajorImageVersion = MajorImageVersion
+                tNT64.OptionalHeader.MinorImageVersion = MinorImageVersion
+                tNT64.OptionalHeader.MajorSubsystemVersion = MajorSubsystemVersion
+                tNT64.OptionalHeader.MinorSubsystemVersion = MinorSubsystemVersion
+                tNT64.OptionalHeader.Win32VersionValue = Win32VersionValue
+            #End If
+            #If ENABLE_OPT_HEADER_DLL_CHARACTERISTICS Then
+                If DLLCHARACTERISTICS_HIGH_ENTROPY_VA Then
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA
+                Else
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA
+                End If
+                If DLLCHARACTERISTICS_DYNAMIC_BASE Then
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE
+                Else
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE
+                End If
+                If DLLCHARACTERISTICS_FORCE_INTEGRITY Then
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_FORCE_INTEGRITY
+                Else
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_FORCE_INTEGRITY
+                End If
+                If DLLCHARACTERISTICS_NX_COMPAT Then
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_NX_COMPAT
+                Else
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_NX_COMPAT
+                End If
+                If DLLCHARACTERISTICS_NO_ISOLATION Then
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_NO_ISOLATION
+                Else
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_NO_ISOLATION
+                End If
+                If DLLCHARACTERISTICS_NO_SEH Then
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_NO_SEH
+                Else
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_NO_SEH
+                End If
+                If DLLCHARACTERISTICS_NO_BIND Then
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_NO_BIND
+                Else
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_NO_BIND
+                End If
+                If DLLCHARACTERISTICS_APPCONTAINER Then
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_APPCONTAINER
+                Else
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_APPCONTAINER
+                End If
+                If DLLCHARACTERISTICS_WDM_DRIVER Then
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_WDM_DRIVER
+                Else
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_WDM_DRIVER
+                End If
+                If DLLCHARACTERISTICS_GUARD_CF Then
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_GUARD_CF
+                Else
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_GUARD_CF
+                End If
+                If DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE Then
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics Or IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE
+                Else
+                    tNT64.OptionalHeader.DllCharacteristics = tNT64.OptionalHeader.DllCharacteristics And Not IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE
+                End If
+            #End If
+                
+            CopyMemory ByVal PointerAdd(lpBaseAddress, tDOS.e_lfanew), tNT64, LenB(Of IMAGE_NT_HEADERS64)
+            Debug.Print "Successfully updated header in compiled binary."
+            
+        Else
+            Debug.Print "AutoModifyPEImage error: Unsupported or invalid PE type: " & dwMachine
+        
+        End If
+
+    Else
+        Debug.Print "Signature check failed, not a valid executable."
+    End If
+    UnmapViewOfFile lpBaseAddress
+    CloseHandle hMapping
+    CloseHandle hFile
+End Sub
+
+
+End Module
