@@ -18,6 +18,8 @@ I wanted to investigate whether the default version values tB applies were causi
 
   The design is fairly straightforward, should you want to modify any other fields. Again, this just hard codes values in the header, it won't change the code, and you don't want a mismatch. The actual function takes an optional path argument so you can call it manually at any time to adjust any file, but the automatic modification was my main goal here. It can handle bitness mismatches if you do call it manually.
 
+![image](https://github.com/fafalone/SetPEImageProps/assets/7834493/77e66fd9-9d18-4e89-80aa-47770129ba4d)
+
 **Requirements**
 This module relies on my Windows Development Library for twinBASIC package being added.
 
